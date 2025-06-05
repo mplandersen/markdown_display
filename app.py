@@ -260,6 +260,7 @@ def extract_pii():
             'error': str(e)
         }), 400
 
+# For Vercel deployment
 if __name__ == '__main__':
     import os
     # Use debug=False in production, but allow override via environment variable
