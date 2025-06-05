@@ -1,4 +1,4 @@
-# Markdown Font Display
+# Markdown Display
 
 A beautiful Flask web application that converts markdown text into HTML and displays it with various beautiful fonts. Perfect for previewing how your markdown content will look with different typography.
 
@@ -11,6 +11,7 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 - ⚡ **Fast and lightweight** - Built with Flask for quick performance
 - 🎯 **Live preview** - Auto-converts as you type (with debouncing)
 - ⌨️ **Keyboard shortcuts** - Ctrl+Enter to convert manually
+- 🔍 **PII Detection** - Built-in personal information detection and extraction
 
 ## Font Options
 
@@ -25,11 +26,12 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 9. **Classic** - Readable Merriweather
 10. **Minimal** - Clean Lato
 
-## Installation
+## Quick Start
 
-1. **Clone or download this project**
+1. **Clone the repository**
    ```bash
-   cd "markdown display"
+   git clone https://github.com/mplandersen/markdown_display.git
+   cd markdown_display
    ```
 
 2. **Create a virtual environment (recommended)**
@@ -45,11 +47,11 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 
 4. **Run the application**
    ```bash
-   python app.py
+   python3 app.py
    ```
 
 5. **Open your browser**
-   Navigate to `http://localhost:5000`
+   Navigate to `http://localhost:8080`
 
 ## Usage
 
@@ -57,6 +59,7 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 2. **Choose a font** from the dropdown menu
 3. **Watch the magic happen** - the converted HTML appears instantly in the right panel
 4. **Try different fonts** to see how they affect your content's appearance
+5. **Use PII Detection** - Click "Extract PII" to identify personal information in your text
 
 ### Keyboard Shortcuts
 
@@ -73,6 +76,8 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 - > Blockquotes
 - Horizontal rules
 - Images (with alt text)
+- Tables
+- Strikethrough text
 
 ## Technical Details
 
@@ -81,6 +86,7 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 - **python-markdown** - Markdown to HTML conversion
 - **bleach** - HTML sanitization for security
 - **Pygments** - Syntax highlighting for code blocks
+- **re (regex)** - PII detection patterns
 
 ### Frontend
 - **Modern CSS Grid** - Responsive layout
@@ -93,10 +99,16 @@ A beautiful Flask web application that converts markdown text into HTML and disp
 - Only safe HTML tags and attributes are allowed
 - Input validation on both client and server side
 
+## API Endpoints
+
+- `GET /` - Main application interface
+- `POST /convert` - Convert markdown to HTML
+- `POST /extract_pii` - Extract personally identifiable information from text
+
 ## Project Structure
 
 ```
-markdown display/
+markdown_display/
 ├── app.py                 # Main Flask application
 ├── requirements.txt       # Python dependencies
 ├── README.md             # This file
@@ -106,12 +118,29 @@ markdown display/
     ├── css/
     │   └── style.css     # Styles and animations
     └── js/
-        └── script.js     # Frontend JavaScript
+        ├── script.js     # Main frontend JavaScript
+        └── enhanced.js   # Enhanced features and utilities
+```
+
+## Development
+
+The application runs on port 8080 and binds to all addresses (0.0.0.0) for easy access across your network.
+
+To modify the port or host, edit the bottom of `app.py`:
+```python
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=False)
 ```
 
 ## Contributing
 
 Feel free to fork this project and submit pull requests for any improvements!
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
