@@ -7,12 +7,24 @@ import random
 import tempfile
 import io
 import json
+import time
+import logging
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from pathlib import Path
+from typing import List, Dict
+
+# Add these imports for advanced PII detection
+from pii_detector import AdvancedPIIDetector, PIIEntity
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Needed for redaction functionality
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+# Initialize the advanced PII detector
+pii_detector = AdvancedPIIDetector()
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -335,115 +347,44 @@ def convert_markdown():
 
 @app.route('/redact', methods=['POST'])
 def redact_content():
-    """Apply redaction to markdown content"""
+    """Apply redaction to markdown content using advanced detection"""
     try:
         data = request.get_json()
         content = data.get('content', '')
         redaction_type = data.get('redaction_type', 'abbreviation')
-        redact_names = data.get('redact_names', [])
-        redact_emails = data.get('redact_emails', [])
+        redact_names = data.get('redact_names', True)
+        redact_emails = data.get('redact_emails', True)
         
-        # Apply redactions
-        redacted_content = content
+        # Use advanced detection
+        entities = pii_detector.detect_pii(content, min_confidence=0.7)
         
-        # Create mappings for redactions
-        name_mappings = {}
-        first_name_mappings = {}  # For tracking first names
-        last_name_mappings = {}   # For tracking last names
-        email_mappings = {}
+        # Filter by type based on user preferences
+        filtered_entities = []
+        for entity in entities:
+            if entity.type in ['PERSON', 'ORGANIZATION'] and redact_names:
+                filtered_entities.append(entity)
+            elif entity.type == 'EMAIL' and redact_emails:
+                filtered_entities.append(entity)
+            elif entity.type in ['PHONE_UK', 'SSN_US', 'CREDIT_CARD', 'NI_NUMBER_UK']:
+                # Always redact sensitive data
+                filtered_entities.append(entity)
         
-        # Process name redactions
-        for name in redact_names:
-            parts = name.split()
-            
-            # Skip if not a full name
-            if len(parts) < 2:
-                if redaction_type == 'abbreviation':
-                    abbrev = name[0].upper() + name[-1].upper()
-                    name_mappings[name] = abbrev
-                else:
-                    generic_names = ["Alex", "Taylor", "Jordan", "Casey", "Morgan", "Riley", "Quinn", "Avery", "Skyler", "Dakota"]
-                    name_mappings[name] = random.choice(generic_names)
-                continue
-                
-            first_name = parts[0]
-            last_name = parts[-1]
-            
-            if redaction_type == 'abbreviation':
-                # Create abbreviation (e.g., "John Smith" -> "JS")
-                abbrev = first_name[0] + last_name[0]
-                name_mappings[name] = abbrev.upper()
-                
-                # Map first name to the same abbreviation
-                first_name_mappings[first_name] = abbrev.upper()
-                
-                # Map last name to just its initial
-                last_name_mappings[last_name] = last_name[0].upper()
-            else:  # generic
-                # Use generic names
-                generic_names = ["Alex", "Taylor", "Jordan", "Casey", "Morgan", "Riley", "Quinn", "Avery", "Skyler", "Dakota"]
-                generic_surnames = ["Smith", "Jones", "Brown", "Johnson", "Williams", "Miller", "Davis", "Garcia", "Rodriguez", "Wilson"]
-                
-                generic_name = random.choice(generic_names)
-                generic_surname = random.choice(generic_surnames)
-                
-                name_mappings[name] = f"{generic_name} {generic_surname}"
-                first_name_mappings[first_name] = generic_name
-                last_name_mappings[last_name] = generic_surname
+        # Apply redaction
+        redacted_content = _apply_redaction(content, filtered_entities, redaction_type)
         
-        # Process email redactions
-        for email in redact_emails:
-            if redaction_type == 'abbreviation':
-                # Create abbreviation (e.g., "john.smith@example.com" -> "js@example.com")
-                username = email.split('@')[0]
-                domain = email.split('@')[1]
-                parts = re.split(r'[._-]', username)
-                if len(parts) >= 2:
-                    abbrev = parts[0][0] + parts[-1][0]
-                    email_mappings[email] = f"{abbrev.lower()}@{domain}"
-                else:
-                    email_mappings[email] = f"{username[0].lower()}@{domain}"
-            else:  # generic
-                # Use generic email
-                domain = email.split('@')[1]
-                email_mappings[email] = f"user@{domain}"
-        
-
-        
-        # Apply redactions in order of specificity (full names first, then parts)
-        # Sort by length to avoid partial matches
-        
-        # 1. Apply full name redactions
-        for name, replacement in sorted(name_mappings.items(), key=lambda x: len(x[0]), reverse=True):
-            redacted_content = re.sub(r'\b' + re.escape(name) + r'\b', replacement, redacted_content)
-        
-        # 2. Apply last name redactions
-        for last_name, replacement in sorted(last_name_mappings.items(), key=lambda x: len(x[0]), reverse=True):
-            # Only replace last names that are standalone words
-            redacted_content = re.sub(r'\b' + re.escape(last_name) + r'\b', replacement, redacted_content)
-        
-        # 3. Apply first name redactions
-        for first_name, replacement in sorted(first_name_mappings.items(), key=lambda x: len(x[0]), reverse=True):
-            # Only replace first names that are standalone words
-            redacted_content = re.sub(r'\b' + re.escape(first_name) + r'\b', replacement, redacted_content)
-        
-        # 4. Apply email redactions
-        for email, replacement in email_mappings.items():
-            redacted_content = re.sub(re.escape(email), replacement, redacted_content)
-        
-        # Create redaction summary
-        mappings = {
-            'names': name_mappings,
-            'first_names': first_name_mappings,
-            'last_names': last_name_mappings,
-            'emails': email_mappings,
-            'redaction_type': redaction_type
-        }
+        # Extract for backward compatibility
+        names = [e.text for e in filtered_entities if e.type == 'PERSON']
+        emails = [e.text for e in filtered_entities if e.type == 'EMAIL']
         
         return jsonify({
             'success': True,
             'redacted_content': redacted_content,
-            'mappings': mappings
+            'found_entities': {
+                'names': names,
+                'emails': emails,
+                'total': len(filtered_entities),
+                'by_type': _count_by_type(filtered_entities)
+            }
         })
         
     except Exception as e:
@@ -524,6 +465,73 @@ def extract_pii():
             'error': str(e)
         }), 400
 
+@app.route('/api/detect-pii', methods=['POST'])
+def detect_pii_advanced():
+    """Advanced PII detection endpoint"""
+    try:
+        data = request.get_json()
+        text = data.get('text', '')
+        min_confidence = data.get('min_confidence', 0.5)
+        
+        start_time = time.time()
+        entities = pii_detector.detect_pii(text, min_confidence)
+        detection_time = time.time() - start_time
+        
+        return jsonify({
+            'success': True,
+            'entities': [e.to_dict() for e in entities],
+            'detection_time_ms': round(detection_time * 1000, 2),
+            'stats': {
+                'total_entities': len(entities),
+                'by_type': _count_by_type(entities)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"PII detection error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/submit-feedback', methods=['POST'])
+def submit_pii_feedback():
+    """Submit feedback for PII detection"""
+    try:
+        data = request.get_json()
+        entity = data.get('entity')
+        feedback_type = data.get('feedback_type')  # 'false_positive' or 'correction'
+        correct_type = data.get('correct_type', None)
+        
+        pii_detector.submit_feedback(entity, feedback_type, correct_type)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Feedback recorded successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Feedback submission error: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/detection-stats', methods=['GET'])
+def get_detection_stats():
+    """Get PII detection statistics"""
+    try:
+        stats = pii_detector.get_stats()
+        return jsonify({
+            'success': True,
+            'stats': stats
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.route('/submit_feedback', methods=['POST'])
 def submit_feedback():
     """Submit feedback for improving PII detection"""
@@ -562,6 +570,68 @@ def submit_feedback():
             'success': False,
             'error': str(e)
         }), 400
+
+def _apply_redaction(content: str, entities: List[PIIEntity], redaction_type: str) -> str:
+    """Apply redaction to content based on entities"""
+    # Sort entities by position (reverse order to maintain positions)
+    entities.sort(key=lambda e: e.start, reverse=True)
+    
+    redacted = content
+    for entity in entities:
+        if redaction_type == 'abbreviation':
+            replacement = _abbreviate(entity.text, entity.type)
+        else:  # generic
+            replacement = f"[{entity.type}]"
+        
+        redacted = redacted[:entity.start] + replacement + redacted[entity.end:]
+    
+    return redacted
+
+def _abbreviate(text: str, entity_type: str) -> str:
+    """Abbreviate PII based on type"""
+    if entity_type == 'PERSON':
+        parts = text.split()
+        if len(parts) >= 2:
+            return f"{parts[0][0]}. {parts[-1][0]}."
+        return f"{text[0]}."
+    
+    elif entity_type == 'EMAIL':
+        parts = text.split('@')
+        if len(parts) == 2:
+            username = parts[0]
+            domain = parts[1]
+            return f"{username[0]}***@{domain}"
+        return "[EMAIL]"
+    
+    elif entity_type == 'PHONE_UK':
+        # Keep first 5 digits
+        digits = ''.join(c for c in text if c.isdigit())
+        if len(digits) >= 5:
+            return text[:5] + "****"
+        return "[PHONE]"
+    
+    elif entity_type == 'CREDIT_CARD':
+        # Show last 4 digits
+        digits = ''.join(c for c in text if c.isdigit())
+        if len(digits) >= 4:
+            return f"****-****-****-{digits[-4:]}"
+        return "[CARD]"
+    
+    elif entity_type == 'SSN_US':
+        return "***-**-****"
+    
+    elif entity_type == 'NI_NUMBER_UK':
+        return "** ** ** ** *"
+    
+    else:
+        return f"[{entity_type}]"
+
+def _count_by_type(entities: List[PIIEntity]) -> Dict[str, int]:
+    """Count entities by type"""
+    counts = {}
+    for entity in entities:
+        counts[entity.type] = counts.get(entity.type, 0) + 1
+    return counts
 
 # Model serving endpoints
 @app.route('/api/model-info')
