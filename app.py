@@ -9,6 +9,7 @@ import io
 import json
 import time
 import logging
+import numpy as np
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from pathlib import Path
@@ -17,7 +18,24 @@ from typing import List, Dict
 # Add these imports for advanced PII detection
 from pii_detector import AdvancedPIIDetector, PIIEntity
 
+# Add this custom JSON encoder
+class NumpyEncoder(json.JSONEncoder):
+    """Custom encoder to handle numpy types"""
+    def default(self, obj):
+        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                          np.int16, np.int32, np.int64, np.uint8,
+                          np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        elif isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        return super(NumpyEncoder, self).default(obj)
+
 app = Flask(__name__)
+app.json_encoder = NumpyEncoder  # Configure Flask to use custom encoder
 app.secret_key = 'your_secret_key'  # Needed for redaction functionality
 
 # Initialize logger
@@ -445,18 +463,24 @@ def manual_redact():
 
 @app.route('/extract_pii', methods=['POST'])
 def extract_pii():
-    """Extract potential PII from content"""
+    """Extract potential PII from content using advanced detection"""
     try:
         data = request.get_json()
         content = data.get('content', '')
         
-        names = extract_names(content)
-        emails = extract_emails(content)
+        # Use advanced detection instead of legacy functions
+        entities = pii_detector.detect_pii(content, min_confidence=0.5)
+        
+        # Extract names and emails for backward compatibility
+        names = [e.text for e in entities if e.type in ['PERSON', 'ORGANIZATION']]
+        emails = [e.text for e in entities if e.type == 'EMAIL']
         
         return jsonify({
             'success': True,
             'names': names,
-            'emails': emails
+            'emails': emails,
+            'entities': [e.to_dict() for e in entities],
+            'total_entities': len(entities)
         })
         
     except Exception as e:
@@ -743,6 +767,28 @@ def serve_model(filename):
     response.headers['Access-Control-Allow-Origin'] = '*'
     
     return response
+
+# Test endpoint for PII detection
+@app.route('/test-pii')
+def test_pii():
+    """Test endpoint to verify PII detector is working"""
+    test_text = "John Smith called from 07700 900123 about jane.doe@example.com. Sarah Wilson's SSN is 123-45-6789."
+    try:
+        entities = pii_detector.detect_pii(test_text, min_confidence=0.5)
+        return jsonify({
+            'test_text': test_text,
+            'entities_found': len(entities),
+            'entities': [e.to_dict() for e in entities],
+            'detector_status': 'working'
+        })
+    except Exception as e:
+        return jsonify({
+            'test_text': test_text,
+            'entities_found': 0,
+            'entities': [],
+            'detector_status': 'error',
+            'error': str(e)
+        })
 
 # Health check endpoint
 @app.route('/health')

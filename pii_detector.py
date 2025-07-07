@@ -8,6 +8,7 @@ Supports UK phone numbers and learns from user feedback
 import re
 import json
 import logging
+import time
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
 from dataclasses import dataclass, asdict
@@ -35,7 +36,19 @@ class PIIEntity:
     context: Optional[str] = None
     
     def to_dict(self):
-        return asdict(self)
+        """Convert to dictionary with numpy type conversion"""
+        result = asdict(self)
+        
+        # Convert numpy types to Python types
+        for key, value in result.items():
+            if isinstance(value, np.integer):
+                result[key] = int(value)
+            elif isinstance(value, np.floating):
+                result[key] = float(value)
+            elif isinstance(value, np.ndarray):
+                result[key] = value.tolist()
+                
+        return result
 
 
 class PatternEngine:
@@ -49,6 +62,18 @@ class PatternEngine:
         return {
             'EMAIL': [
                 (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), 0.99),
+            ],
+            'PERSON': [
+                # Names with titles: Dr. John Smith, Mr. Smith, Mrs. Jane Doe
+                (re.compile(r'\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Professor|Sir|Madam|Lady|Lord|Captain|Major|Colonel|General|Admiral)\.?\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b'), 0.90),
+                # Full names: John Smith, Jane Doe, Mary Johnson
+                (re.compile(r'\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*)\b'), 0.75),
+                # Names with possessive: John's, Sarah's
+                (re.compile(r'\b([A-Z][a-z]{2,})\'s\b'), 0.70),
+                # Names after indicators: by John Smith, from Mary
+                (re.compile(r'\b(?:by|from|with|dear|sincerely|regards|thanks|signed|written\s+by|authored\s+by|created\s+by|designed\s+by|developed\s+by)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b', re.IGNORECASE), 0.85),
+                # Names in quotes: "John Smith", 'Jane Doe'
+                (re.compile(r'["\']([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,})["\']'), 0.80),
             ],
             'PHONE_UK': [
                 # UK Mobile: 07xxx xxxxxx
@@ -98,23 +123,42 @@ class PatternEngine:
                 for match in pattern.finditer(text):
                     # Additional validation for specific types
                     confidence = base_confidence
+                    matched_text = match.group()
+                    start = match.start()
+                    end = match.end()
+                    
+                    # For PERSON patterns, extract the captured group if it exists
+                    if pii_type == 'PERSON' and match.groups():
+                        # Use the captured group (the actual name without title/context)
+                        captured_name = match.group(1)
+                        if captured_name:
+                            # Find the position of the captured name within the full match
+                            name_start = text.find(captured_name, start)
+                            if name_start != -1:
+                                matched_text = captured_name
+                                start = name_start
+                                end = name_start + len(captured_name)
+                            
+                            # Additional validation for person names
+                            if not self._is_likely_person_name(captured_name):
+                                confidence *= 0.5  # Reduce confidence for questionable names
                     
                     if pii_type == 'CREDIT_CARD':
                         # Luhn algorithm validation
-                        card_num = re.sub(r'[\s\-]', '', match.group())
+                        card_num = re.sub(r'[\s\-]', '', matched_text)
                         if self._validate_credit_card(card_num):
                             confidence = min(confidence + 0.10, 0.99)
                         else:
                             confidence = 0.3  # Low confidence if fails Luhn check
                     
                     entities.append(PIIEntity(
-                        text=match.group(),
+                        text=matched_text,
                         type=pii_type,
-                        start=match.start(),
-                        end=match.end(),
+                        start=start,
+                        end=end,
                         confidence=confidence,
                         source='pattern',
-                        context=text[max(0, match.start()-20):min(len(text), match.end()+20)]
+                        context=text[max(0, start-20):min(len(text), end+20)]
                     ))
                     
         return entities
@@ -138,6 +182,79 @@ class PatternEngine:
             return (checksum + digits[-1]) % 10 == 0
         except:
             return False
+
+    def _is_likely_person_name(self, name: str) -> bool:
+        """Validate if a string is likely a person's name"""
+        if not name or len(name.strip()) < 2:
+            return False
+            
+        words = name.strip().split()
+        
+        # Common false positives to exclude
+        false_positives = {
+            'the', 'and', 'or', 'but', 'for', 'with', 'about', 'from', 'to', 'in', 'on', 'at', 'by',
+            'this', 'that', 'these', 'those', 'they', 'them', 'their', 'there', 'then', 'than',
+            'when', 'where', 'what', 'which', 'who', 'why', 'how', 'can', 'could', 'would', 'should',
+            'will', 'shall', 'may', 'might', 'must', 'have', 'has', 'had', 'been', 'being', 'are',
+            'was', 'were', 'is', 'am', 'do', 'does', 'did', 'get', 'got', 'make', 'made', 'take',
+            'great', 'good', 'new', 'first', 'last', 'long', 'little', 'own', 'other', 'old', 'right',
+            'big', 'high', 'different', 'public', 'able', 'possible', 'available', 'important', 'social',
+            'special', 'certain', 'personal', 'open', 'real', 'sure', 'whole', 'several', 'united',
+            'local', 'human', 'far', 'close', 'year', 'day', 'time', 'week', 'month', 'life', 'world',
+            'country', 'state', 'city', 'area', 'community', 'business', 'home', 'family', 'way', 'case',
+            'place', 'thing', 'man', 'woman', 'child', 'boy', 'girl', 'student', 'teacher', 'number',
+            'part', 'point', 'problem', 'program', 'question', 'system', 'government', 'company', 'group',
+            'party', 'money', 'information', 'water', 'room', 'mother', 'father', 'office', 'door',
+            'health', 'person', 'art', 'history', 'result', 'change', 'morning', 'reason', 'research',
+            'moment', 'air', 'force', 'education', 'foot', 'age', 'nothing', 'everything', 'everyone',
+            'someone', 'anyone', 'something', 'anything', 'each', 'every', 'all', 'both', 'either',
+            'neither', 'some', 'any', 'many', 'much', 'few', 'more', 'most', 'less', 'least', 'enough',
+            'several', 'various', 'different', 'same', 'similar', 'such', 'here', 'there', 'everywhere',
+            'somewhere', 'anywhere', 'nowhere', 'above', 'below', 'over', 'under', 'between', 'among',
+            'through', 'during', 'before', 'after', 'while', 'until', 'since', 'because', 'although',
+            'though', 'however', 'therefore', 'moreover', 'furthermore', 'nevertheless', 'otherwise',
+            'instead', 'meanwhile', 'finally', 'certainly', 'probably', 'perhaps', 'maybe', 'definitely',
+            'absolutely', 'completely', 'totally', 'entirely', 'fully', 'quite', 'rather', 'very',
+            'really', 'truly', 'actually', 'basically', 'generally', 'usually', 'normally', 'typically',
+            'commonly', 'frequently', 'often', 'sometimes', 'occasionally', 'rarely', 'seldom', 'never',
+            'always', 'forever', 'once', 'twice', 'again', 'also', 'too', 'even', 'only', 'just',
+            'almost', 'nearly', 'hardly', 'barely', 'scarcely', 'soon', 'late', 'early', 'quickly',
+            'slowly', 'carefully', 'easily', 'simply', 'clearly', 'obviously', 'apparently', 'certainly',
+            'exactly', 'precisely', 'approximately', 'roughly', 'around', 'especially', 'particularly',
+            'specifically', 'mainly', 'mostly', 'largely', 'primarily', 'chiefly', 'predominantly',
+            'principally'
+        }
+        
+        # Check if any word is a common false positive
+        if any(word.lower() in false_positives for word in words):
+            return False
+        
+        # Must have at least 2 characters per word
+        if any(len(word) < 2 for word in words):
+            return False
+        
+        # Names should not contain numbers
+        if any(char.isdigit() for char in name):
+            return False
+        
+        # Names should not be all uppercase (unless short abbreviations)
+        if name.isupper() and len(name) > 4:
+            return False
+        
+        # Check against common non-name patterns
+        non_name_patterns = [
+            r'\b(PDF|HTML|XML|JSON|CSV|DOC|DOCX|XLS|XLSX|PPT|PPTX)\b',  # File formats
+            r'\b(HTTP|HTTPS|FTP|SMTP|TCP|UDP|IP|DNS|URL|URI)\b',  # Protocols
+            r'\b(CEO|CTO|CFO|COO|VP|SVP|EVP|MD|PhD|MBA|BSc|MSc)\b',  # Titles/Degrees
+            r'\b(USA|UK|US|EU|UN|NATO|FBI|CIA|NSA|IRS)\b',  # Organizations/Countries
+            r'\b(API|SDK|GUI|UI|UX|AI|ML|DL|NLP|OCR|GPS)\b',  # Tech terms
+        ]
+        
+        for pattern in non_name_patterns:
+            if re.search(pattern, name, re.IGNORECASE):
+                return False
+        
+        return True
 
 
 class FeedbackLearner:
@@ -244,6 +361,7 @@ class MLModelInference:
             8: 'I-MISC'
         }
         self._initialize_model()
+        self._initialize_tokenizer()
     
     def _initialize_model(self):
         """Initialize ONNX runtime session"""
@@ -268,132 +386,121 @@ class MLModelInference:
         except Exception as e:
             logger.error(f"Failed to load ONNX model: {e}")
     
-    def _simple_tokenize(self, text: str) -> Dict:
-        """Simple tokenization that mimics BERT tokenizer behavior"""
-        # This is a simplified version - in production, you'd load the actual tokenizer
-        words = text.split()
-        tokens = ['[CLS]']
-        word_ids = []
-        
-        for i, word in enumerate(words):
-            # Simple subword tokenization (split on common patterns)
-            if len(word) > 5:
-                # Split long words
-                tokens.extend([word[:len(word)//2], word[len(word)//2:]])
-                word_ids.extend([i, i])
-            else:
-                tokens.append(word.lower())
-                word_ids.append(i)
-        
-        tokens.append('[SEP]')
-        word_ids.append(None)
-        
-        # Create attention mask
-        attention_mask = [1] * len(tokens)
-        
-        # Pad to 128 tokens (typical BERT length)
-        max_length = 128
-        padding_length = max_length - len(tokens)
-        if padding_length > 0:
-            tokens.extend(['[PAD]'] * padding_length)
-            attention_mask.extend([0] * padding_length)
-            word_ids.extend([None] * padding_length)
-        else:
-            tokens = tokens[:max_length]
-            attention_mask = attention_mask[:max_length]
-            word_ids = word_ids[:max_length]
-        
-        # Convert to IDs (simplified - just hash the tokens)
-        input_ids = [abs(hash(token)) % 28996 for token in tokens]  # Actual vocab size
-        
-        # Create token_type_ids (all zeros for single sentence)
-        token_type_ids = [0] * len(tokens)
-        
-        return {
-            'input_ids': np.array([input_ids], dtype=np.int64),
-            'attention_mask': np.array([attention_mask], dtype=np.int64),
-            'token_type_ids': np.array([token_type_ids], dtype=np.int64),  # ADD THIS LINE
-            'word_ids': word_ids,
-            'words': words
-        }
+    def _initialize_tokenizer(self):
+        """Initialize the DistilBERT tokenizer"""
+        try:
+            from transformers import AutoTokenizer
+            
+            # Use DistilBERT tokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained('distilbert-base-cased')
+            logger.info("DistilBERT tokenizer loaded successfully")
+            
+        except ImportError:
+            logger.error("transformers library not available. ML inference will be disabled.")
+            self.tokenizer = None
+        except Exception as e:
+            logger.error(f"Failed to load tokenizer: {e}")
+            self.tokenizer = None
     
     def detect(self, text: str) -> List[PIIEntity]:
         """Run ML inference to detect entities"""
-        if self.session is None:
+        if self.session is None or self.tokenizer is None:
             return []
         
         try:
-            # Tokenize text
-            inputs = self._simple_tokenize(text)
+            # Tokenize text using proper DistilBERT tokenizer
+            max_length = 128
+            encoded = self.tokenizer(
+                text,
+                max_length=max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='np',
+                return_offsets_mapping=True
+            )
+            
+            # Convert to proper format for ONNX
+            input_ids = encoded['input_ids'].astype(np.int64)
+            attention_mask = encoded['attention_mask'].astype(np.int64)
+            token_type_ids = np.zeros_like(input_ids, dtype=np.int64)  # All zeros for single sentence
             
             # Run inference
             outputs = self.session.run(
                 None,
                 {
-                    'input_ids': inputs['input_ids'],
-                    'attention_mask': inputs['attention_mask'],
-                    'token_type_ids': inputs['token_type_ids']  # ADD THIS LINE
+                    'input_ids': input_ids,
+                    'attention_mask': attention_mask,
+                    'token_type_ids': token_type_ids
                 }
             )
             
             # Process predictions
             predictions = outputs[0][0]  # Shape: [sequence_length, num_labels]
-            predicted_labels = np.argmax(predictions, axis=1)
-            confidences = np.max(predictions, axis=1)
             
-            # Convert predictions to entities
+            # Apply softmax to convert logits to probabilities
+            def softmax(x):
+                exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+                return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+            
+            probabilities = softmax(predictions)
+            predicted_labels = np.argmax(probabilities, axis=1)
+            confidences = np.max(probabilities, axis=1)
+            
+            # Convert predictions to entities using offset mapping
             entities = []
             current_entity = None
+            offset_mapping = encoded['offset_mapping'][0]  # Remove batch dimension
             
             for i, (label_id, confidence) in enumerate(zip(predicted_labels, confidences)):
-                if i >= len(inputs['word_ids']) or inputs['word_ids'][i] is None:
+                # Skip special tokens and padding
+                if offset_mapping[i][0] == 0 and offset_mapping[i][1] == 0:
                     continue
                     
                 label = self.label_map.get(label_id, 'O')
-                word_idx = inputs['word_ids'][i]
+                start_pos, end_pos = offset_mapping[i]
                 
                 if label.startswith('B-'):
                     # Start of new entity
                     if current_entity:
                         entities.append(current_entity)
                     
-                    entity_type = label[2:]
+                    entity_type = self._map_entity_type(label[2:])
                     current_entity = {
-                        'type': self._map_entity_type(entity_type),
-                        'text': inputs['words'][word_idx],
-                        'confidence': float(confidence),
-                        'word_indices': [word_idx]
+                        'type': entity_type,
+                        'start': int(start_pos),  # Convert numpy int to Python int
+                        'end': int(end_pos),      # Convert numpy int to Python int
+                        'confidence': float(confidence),  # Convert numpy float to Python float
+                        'text': text[int(start_pos):int(end_pos)]  # Ensure slice indices are Python ints
                     }
                 
                 elif label.startswith('I-') and current_entity:
                     # Continuation of entity
-                    if word_idx not in current_entity['word_indices']:
-                        current_entity['text'] += ' ' + inputs['words'][word_idx]
-                        current_entity['word_indices'].append(word_idx)
-                        current_entity['confidence'] = min(current_entity['confidence'], float(confidence))
+                    entity_type = self._map_entity_type(label[2:])
+                    if current_entity['type'] == entity_type:
+                        current_entity['end'] = int(end_pos)  # Convert numpy int to Python int
+                        current_entity['text'] = text[current_entity['start']:int(end_pos)]  # Ensure slice indices are Python ints
+                        current_entity['confidence'] = min(current_entity['confidence'], float(confidence))  # Convert numpy float to Python float
                 
                 else:
-                    # Not an entity
+                    # Not an entity or different entity type
                     if current_entity:
                         entities.append(current_entity)
                         current_entity = None
             
-            # Don't forget last entity
+            # Don't forget the last entity
             if current_entity:
                 entities.append(current_entity)
             
             # Convert to PIIEntity objects
             pii_entities = []
             for ent in entities:
-                # Find position in original text
-                start = text.find(ent['text'])
-                if start != -1:
+                if ent['confidence'] >= 0.5:  # Basic confidence threshold
                     pii_entities.append(PIIEntity(
                         text=ent['text'],
                         type=ent['type'],
-                        start=start,
-                        end=start + len(ent['text']),
-                        confidence=ent['confidence'],
+                        start=int(ent['start']),  # Convert numpy int64 to Python int
+                        end=int(ent['end']),      # Convert numpy int64 to Python int
+                        confidence=float(ent['confidence']),  # Convert numpy float to Python float
                         source='ml_model'
                     ))
             

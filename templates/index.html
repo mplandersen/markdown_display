@@ -6,6 +6,7 @@
     <title>Markdown Font Display</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:wght@400;600&family=Comfortaa:wght@300;400;600&family=Dancing+Script:wght@400;600&family=Fira+Code:wght@300;400&family=Merriweather:wght@300;400&family=Lato:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/ml-styles.css') }}">
     <style>
         :root {
             --primary-color: rgb(0,172,255);
@@ -643,6 +644,56 @@
             transform: translateY(-1px);
         }
         
+        /* Detection Method Selector */
+        .detection-method-selector {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .detection-method-selector h5 {
+            margin: 0;
+            color: var(--secondary-color);
+            font-weight: 600;
+        }
+        
+        .detection-method-selector label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            transition: all 0.2s ease;
+        }
+        
+        .detection-method-selector label:hover {
+            border-color: var(--primary-color);
+            background: rgba(0, 172, 255, 0.05);
+        }
+        
+        .detection-method-selector input[type="radio"] {
+            margin: 0;
+        }
+        
+        .detection-method-selector input[type="radio"]:checked + span {
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+        
+        .detection-method-selector label:has(input[type="radio"]:checked) {
+            border-color: var(--primary-color);
+            background: rgba(0, 172, 255, 0.1);
+        }
+
         @media (max-width: 768px) {
             .pii-lists {
                 grid-template-columns: 1fr;
@@ -659,6 +710,11 @@
             
             .redaction-actions {
                 flex-direction: column;
+            }
+            
+            .detection-method-selector {
+                flex-direction: column;
+                align-items: flex-start;
             }
         }
     </style>
@@ -751,6 +807,22 @@ code block
                             </div>
                         </div>
                         
+                        <div class="pii-lists" style="margin-top: 20px;">
+                            <div class="pii-column">
+                                <h5><i class="fas fa-phone"></i> Phone Numbers</h5>
+                                <div id="phones-list" class="pii-items">
+                                    <p class="no-items">No phone numbers detected</p>
+                                </div>
+                            </div>
+                            
+                            <div class="pii-column">
+                                <h5><i class="fas fa-credit-card"></i> Sensitive Data</h5>
+                                <div id="sensitive-list" class="pii-items">
+                                    <p class="no-items">No sensitive data detected</p>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div class="redaction-actions">
                             <button id="apply-redaction" class="btn-redact">
                                 <i class="fas fa-shield-alt"></i>
@@ -774,6 +846,22 @@ code block
                             <i class="fas fa-user-secret"></i>
                             <span class="btn-text">Detect & Redact PII</span>
                         </button>
+                    </div>
+                    
+                    <div class="detection-method-selector" id="detection-method-selector">
+                        <h5 style="margin: 0 10px 0 0;">Detection Method:</h5>
+                        <label>
+                            <input type="radio" name="detection_method" value="hybrid" checked>
+                            <span>Hybrid (Recommended)</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="detection_method" value="ml-only">
+                            <span>Local ML Only</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="detection_method" value="server-only">
+                            <span>Server Only</span>
+                        </label>
                     </div>
                 </div>
             </div>
@@ -806,6 +894,18 @@ code block
         </div>
     </div>
 
+    <!-- ONNX Runtime Web (load from CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.16.3/dist/ort.min.js"></script>
+
+    <!-- ML Detection Scripts (in this exact order) -->
+    <script src="{{ url_for('static', filename='js/bert-tokenizer.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/ml-pii-detector.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/ml-performance-monitor.js') }}"></script>
+
+    <!-- Main script MUST be last -->
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    
+    <!-- Debug and testing functions -->
+    <script src="{{ url_for('static', filename='js/debug-test.js') }}"></script>
 </body>
 </html> 
