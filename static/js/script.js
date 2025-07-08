@@ -205,40 +205,22 @@ document.addEventListener('DOMContentLoaded', async function() {
 
             let detectionResults;
             
-            if (mlDetector && mlDetector.modelLoaded && detectionMethod !== 'server-only') {
-                console.log('Using ML detection...');
-                // Try ML detection first
-                try {
-                    detectionResults = await mlDetector.detectPII(content, {
-                        minConfidence: 0.7,
-                        includePatterns: true,
-                        maxLength: 512
-                    });
-                    console.log('ML detection completed:', detectionResults);
-                    
-                    // In hybrid mode, fall back to server if ML returns no entities
-                    if (detectionMethod === 'hybrid' && (!detectionResults.entities || detectionResults.entities.length === 0)) {
-                        console.log('ML returned no entities, falling back to server detection...');
-                        detectionResults = await detectPIIServer(content);
-                    }
-                } catch (mlError) {
-                    console.error('ML detection failed:', mlError);
-                    if (detectionMethod === 'hybrid') {
-                        console.log('ML error, falling back to server detection...');
-                        // Fallback to server
-                        detectionResults = await detectPIIServer(content);
-                    } else {
-                        throw mlError;
-                    }
-                }
-            } else {
-                console.log('Using server detection...');
-                console.log('Reasons for server detection:', {
-                    noMlDetector: !mlDetector,
-                    modelNotLoaded: mlDetector && !mlDetector.modelLoaded,
-                    serverOnlyMode: detectionMethod === 'server-only'
+            if (mlDetector && mlDetector.modelLoaded && detectionMethod === 'ml-only') {
+                console.log('Using client-side ML detection only...');
+                // Only use client-side ML when explicitly requested
+                detectionResults = await mlDetector.detectPII(content, {
+                    minConfidence: 0.5,
+                    includeLowConfidence: true
                 });
-                // Use server detection
+                console.log('Client-side ML detection completed:', detectionResults);
+            } else if (detectionMethod === 'hybrid' || detectionMethod === 'server-only') {
+                console.log('Using server detection...');
+                console.log('Detection method:', detectionMethod);
+                // Always use server for hybrid and server-only modes
+                detectionResults = await detectPIIServer(content);
+            } else {
+                console.log('Using server detection (fallback)...');
+                // Fallback to server if no method specified
                 detectionResults = await detectPIIServer(content);
             }
 
